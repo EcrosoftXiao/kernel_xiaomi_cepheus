@@ -363,6 +363,7 @@ struct fts_ts_info {
 	bool palm_sensor_switch;
 	bool tp_pm_suspend;
 	struct completion pm_resume_completion;
+	struct proc_dir_entry *input_proc;
 };
 
 struct fts_mode_switch {
