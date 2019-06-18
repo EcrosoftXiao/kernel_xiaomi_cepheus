@@ -416,20 +416,26 @@ enum mbhc_hs_pullup_iref_v2 {
 	HS_PULLUP_I_OFF,
 };
 
-struct usbc_ana_audio_config {
-	int usbc_en1_gpio;
-	int usbc_en2n_gpio;
-	int usbc_force_gpio;
-	struct device_node *usbc_en1_gpio_p; /* used by pinctrl API */
-	struct device_node *usbc_en2n_gpio_p; /* used by pinctrl API */
-	struct device_node *usbc_force_gpio_p; /* used by pinctrl API */
-};
-
 enum mbhc_moisture_rref {
 	R_OFF,
 	R_24_KOHM,
 	R_84_KOHM,
 	R_184_KOHM,
+};
+
+struct usbc_ana_audio_config {
+	int usbc_en1_gpio;
+	int usbc_en2n_gpio;
+	int usbc_force_gpio;
+	int euro_us_hw_switch_gpio;
+	int uart_audio_switch_gpio;
+	int subpcb_id_gpio;
+	struct device_node *usbc_en1_gpio_p; /* used by pinctrl API */
+	struct device_node *usbc_en2n_gpio_p; /* used by pinctrl API */
+	struct device_node *usbc_force_gpio_p; /* used by pinctrl API */
+	struct device_node *euro_us_hw_switch_gpio_p; /* used by pinctrl API */
+	struct device_node *uart_audio_switch_gpio_p; /* used by pinctrl API */
+	struct device_node *subpcb_id_gpio_p; /* used by pinctrl API */
 };
 
 struct wcd_mbhc_config {
@@ -447,9 +453,12 @@ struct wcd_mbhc_config {
 	int anc_micbias;
 	bool enable_anc_mic_detect;
 	u32 enable_usbc_analog;
+	u32 use_fsa4476_gpio;
 	bool moisture_duty_cycle_en;
 	struct usbc_ana_audio_config usbc_analog_cfg;
 	bool fsa_enable;
+	void (*enable_dual_adc_gpio)(struct device_node *node, bool en);
+	struct device_node *dual_adc_gpio_node;
 };
 
 struct wcd_mbhc_intr {
