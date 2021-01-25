@@ -137,7 +137,7 @@ static int dma_buf_release(struct inode *inode, struct file *file)
 		reservation_object_fini(dmabuf->resv);
 
 	module_put(dmabuf->owner);
-	kfree(dmabuf->buf_name);
+	kfree(dmabuf->name);
 	kfree(dmabuf);
 	return 0;
 }
@@ -606,7 +606,7 @@ struct dma_buf *dma_buf_export(const struct dma_buf_export_info *exp_info)
 	init_waitqueue_head(&dmabuf->poll);
 	dmabuf->cb_excl.poll = dmabuf->cb_shared.poll = &dmabuf->poll;
 	dmabuf->cb_excl.active = dmabuf->cb_shared.active = 0;
-	dmabuf->buf_name = bufname;
+	dmabuf->name = bufname;
 	dmabuf->ktime = ktime_get();
 
 	if (!resv) {
@@ -1363,7 +1363,7 @@ static int dma_buf_debug_show(struct seq_file *s, void *unused)
 				buf_obj->size,
 				buf_obj->file->f_flags, buf_obj->file->f_mode,
 				file_count(buf_obj->file),
-				buf_obj->exp_name, buf_obj->buf_name,
+				buf_obj->exp_name, buf_obj->name,
 				file_inode(buf_obj->file)->i_ino,
 				buf_obj->name ?: "");
 
@@ -1474,7 +1474,7 @@ static void write_proc(struct seq_file *s, struct dma_proc *proc)
 
 		elapmstime = ktime_divns(elapmstime, MSEC_PER_SEC);
 		seq_printf(s, "%-8s\t%-8ld\t%-8lld\n",
-				dmabuf->buf_name,
+				dmabuf->name,
 				dmabuf->size / SZ_1K,
 				elapmstime);
 	}
