@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm64 4.14.217 Kernel Configuration
+# Linux/arm64 4.14.221 Kernel Configuration
 #
 CONFIG_ARM64=y
 CONFIG_64BIT=y
@@ -5238,6 +5238,16 @@ CONFIG_NVMEM_SPMI_SDAM=y
 # CONFIG_TEE is not set
 CONFIG_SENSORS_SSC=y
 # CONFIG_ESOC is not set
+
+#
+# Trusty
+#
+CONFIG_TRUSTY=y
+# CONFIG_TRUSTY_VIRQ_SIMULATION is not set
+# CONFIG_TRUSTY_FIQ is not set
+# CONFIG_TRUSTY_FIQ_ARM64 is not set
+CONFIG_TRUSTY_LOG=y
+# CONFIG_TRUSTY_VIRTIO is not set
 
 #
 # Qualcomm RmNet extensions
