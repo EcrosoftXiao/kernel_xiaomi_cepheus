@@ -122,26 +122,35 @@ static int hdd_close_ndi(struct hdd_adapter *adapter)
 #ifdef NDP_SAP_CONCURRENCY_ENABLE
 static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 {
-	struct hdd_adapter *adapter;
+	struct hdd_adapter *adapter, *next_adapter = NULL;
 	struct hdd_station_ctx *sta_ctx;
 
-	hdd_for_each_adapter(hdd_ctx, adapter) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		switch (adapter->device_mode) {
 		case QDF_P2P_GO_MODE:
 			if (test_bit(SOFTAP_BSS_STARTED,
-				     &adapter->event_flags))
+				     &adapter->event_flags)) {
+				dev_put(adapter->dev);
+				if (next_adapter)
+					dev_put(next_adapter->dev);
 				return false;
+			}
 			break;
 		case QDF_P2P_CLIENT_MODE:
 		case QDF_IBSS_MODE:
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 			if (hdd_conn_is_connected(sta_ctx) ||
-			    hdd_is_connecting(sta_ctx))
+			    hdd_is_connecting(sta_ctx)) {
+				dev_put(adapter->dev);
+				if (next_adapter)
+					dev_put(next_adapter->dev);
 				return false;
+			}
 			break;
 		default:
 			break;
 		}
+		dev_put(adapter->dev);
 	}
 
 	return true;
@@ -149,27 +158,36 @@ static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 #else
 static bool hdd_is_ndp_allowed(struct hdd_context *hdd_ctx)
 {
-	struct hdd_adapter *adapter;
+	struct hdd_adapter *adapter, *next_adapter = NULL;
 	struct hdd_station_ctx *sta_ctx;
 
-	hdd_for_each_adapter(hdd_ctx, adapter) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		switch (adapter->device_mode) {
 		case QDF_P2P_GO_MODE:
 		case QDF_SAP_MODE:
 			if (test_bit(SOFTAP_BSS_STARTED,
-				     &adapter->event_flags))
+				     &adapter->event_flags)) {
+				dev_put(adapter->dev);
+				if (next_adapter)
+					dev_put(next_adapter->dev);
 				return false;
+			}
 			break;
 		case QDF_P2P_CLIENT_MODE:
 		case QDF_IBSS_MODE:
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter);
 			if (hdd_conn_is_connected(sta_ctx) ||
-			    hdd_is_connecting(sta_ctx))
+			    hdd_is_connecting(sta_ctx)) {
+				dev_put(adapter->dev);
+				if (next_adapter)
+					dev_put(next_adapter->dev);
 				return false;
+			}
 			break;
 		default:
 			break;
 		}
+		dev_put(adapter->dev);
 	}
 
 	return true;
@@ -528,7 +546,7 @@ error_init_txrx:
 
 int hdd_ndi_open(char *iface_name)
 {
-	struct hdd_adapter *adapter;
+	struct hdd_adapter *adapter, *next_adapter = NULL;
 	struct qdf_mac_addr random_ndi_mac;
 	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
 	uint8_t ndi_adapter_count = 0;
@@ -540,9 +558,10 @@ int hdd_ndi_open(char *iface_name)
 		return -EINVAL;
 	}
 
-	hdd_for_each_adapter(hdd_ctx, adapter) {
+	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter) {
 		if (WLAN_HDD_IS_NDI(adapter))
 			ndi_adapter_count++;
+		dev_put(adapter->dev);
 	}
 	if (ndi_adapter_count >= MAX_NDI_ADAPTERS) {
 		hdd_err("Can't allow more than %d NDI adapters",
@@ -875,6 +894,13 @@ int hdd_ndp_new_peer_handler(uint8_t vdev_id, uint16_t sta_id,
 	/* perform following steps for first new peer ind */
 	if (fist_peer) {
 		hdd_debug("Set ctx connection state to connected");
+		/* Disable LRO/GRO for NDI Mode */
+		if (hdd_ctx->ol_enable &&
+		    !ucfg_is_nan_dbs_supported(hdd_ctx->psoc)) {
+			hdd_debug("Disable LRO/GRO in NDI Mode");
+			hdd_disable_rx_ol_in_concurrency(true);
+		}
+
 		hdd_bus_bw_compute_prev_txrx_stats(adapter);
 		hdd_bus_bw_compute_timer_start(hdd_ctx);
 		sta_ctx->conn_info.conn_state = eConnectionState_NdiConnected;
@@ -906,6 +932,17 @@ void hdd_cleanup_ndi(struct hdd_context *hdd_ctx,
 				     WLAN_CONTROL_PATH);
 	hdd_bus_bw_compute_reset_prev_txrx_stats(adapter);
 	hdd_bus_bw_compute_timer_try_stop(hdd_ctx);
+	if ((hdd_ctx->ol_enable &&
+	     !ucfg_is_nan_dbs_supported(hdd_ctx->psoc)) &&
+	    ((policy_mgr_get_connection_count(hdd_ctx->psoc) == 0) ||
+	     ((policy_mgr_get_connection_count(hdd_ctx->psoc) == 1) &&
+	      (policy_mgr_mode_specific_connection_count(
+						hdd_ctx->psoc,
+						PM_STA_MODE,
+						NULL) == 1)))) {
+		hdd_debug("Enable LRO/GRO");
+		hdd_disable_rx_ol_in_concurrency(false);
+	}
 }
 
 /**
