@@ -5133,6 +5133,7 @@ typedef enum {
  * @WMI_DBGLOG_MOD_LOG_LEVEL: Enable MODULE level debug
  * @WMI_DBGLOG_TYPE: set type of the debug output
  * @WMI_DBGLOG_REPORT_ENABLE: Enable Disable debug
+ * @WMI_DBGLOG_MOD_WOW_LOG_LEVEL: set the WOW MODULE debug loglevel
  */
 typedef enum {
 	WMI_DBGLOG_LOG_LEVEL = 0x1,
@@ -5142,7 +5143,8 @@ typedef enum {
 	WMI_DBGLOG_MODULE_DISABLE,
 	WMI_DBGLOG_MOD_LOG_LEVEL,
 	WMI_DBGLOG_TYPE,
-	WMI_DBGLOG_REPORT_ENABLE
+	WMI_DBGLOG_REPORT_ENABLE,
+	WMI_DBGLOG_MOD_WOW_LOG_LEVEL
 } WMI_DBG_PARAM;
 
 /**
@@ -7719,6 +7721,25 @@ struct wmi_neighbor_report_data {
 	uint32_t resp_time;
 	uint8_t num_freq;
 	uint32_t freq[MAX_ROAM_SCAN_CHAN];
+};
+
+/**
+ * struct wmi_roam_msg_info - Roam message related information
+ * @present:    Flag to check if the roam msg info tlv is present
+ * @timestamp:  Timestamp is the absolute time w.r.t host timer which is
+ * synchronized between the host and target
+ * @msg_id:     Message ID from WMI_ROAM_MSG_ID
+ * @msg_param1: msg_param1, values is based on the host & FW
+ * understanding and depend on the msg ID
+ * @msg_param2: msg_param2 value is based on the host & FW understanding
+ * and depend on the msg ID
+ */
+struct wmi_roam_msg_info {
+	bool present;
+	uint32_t timestamp;
+	uint32_t msg_id;
+	uint32_t msg_param1;
+	uint32_t msg_param2;
 };
 
 /**

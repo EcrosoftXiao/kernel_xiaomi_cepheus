@@ -377,3 +377,17 @@ int hif_dummy_addr_in_boundary(struct hif_softc *scn, uint32_t offset)
 void hif_dummy_config_irq_affinity(struct hif_softc *scn)
 {
 }
+
+/**
+ * hif_dummy_log_bus_info - dummy call
+ * @scn: hif context
+ * @data: hang event data buffer
+ * @offset: offset at which data needs to be written
+ *
+ * Return: bool
+ */
+bool hif_dummy_log_bus_info(struct hif_softc *scn, uint8_t *data,
+			    unsigned int *offset)
+{
+	return false;
+}
