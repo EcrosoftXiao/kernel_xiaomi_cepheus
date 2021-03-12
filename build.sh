@@ -21,6 +21,13 @@ export SUBARCH=arm64
 make O=out cepheus_defconfig
 make -j4 O=out CC=$CLANG_PATH/bin/clang CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi-
 
+if [ ! -e $KERNEL_PATH/out/arch/arm64/boot/Image.gz-dtb ]; then
+    echo "=======================FAILED!!!======================="
+    rm -rf $ANYKERNEL_PATH $CLANG_PATH $KERNEL_PATH/out/
+    make mrproper>/dev/null 2>&1
+    exit -1>/dev/null 2>&1
+fi
+
 echo "=========================Patch========================="
 rm -r $ANYKERNEL_PATH/modules $ANYKERNEL_PATH/patch $ANYKERNEL_PATH/ramdisk
 cp $KERNEL_PATH/anykernel.sh $ANYKERNEL_PATH/
