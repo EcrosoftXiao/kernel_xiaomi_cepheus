@@ -33,6 +33,15 @@ ramdisk_compression=auto;
 ## AnyKernel install
 dump_boot;
 
+## Screen OC
+patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=4"
+fr=$(cat /sdcard/framerate_override | tr -cd "[0-9]");
+[ $fr -eq 66 ] && ui_print "   Setting 66 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=1"
+[ $fr -eq 69 ] && ui_print "   Setting 69 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=2"
+[ $fr -eq 72 ] && ui_print "   Setting 72 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=3"
+[ $fr -eq 75 ] && ui_print "   Setting 75 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=4"
+rm /sdcard/framerate_override
+
 write_boot;
 ## end install
 
