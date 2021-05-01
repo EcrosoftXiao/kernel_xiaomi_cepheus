@@ -761,13 +761,11 @@ int dsi_panel_update_doze(struct dsi_panel *panel) {
 	int rc = 0;
 
 	if (panel->doze_enabled && panel->doze_mode == DSI_DOZE_HBM) {
-		dsi_panel_set_dimlayer_bl_backlight(panel, false);
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DOZE_HBM);
 		if (rc)
 			pr_err("[%s] failed to send DSI_CMD_SET_DOZE_HBM cmd, rc=%d\n",
 					panel->name, rc);
 	} else if (panel->doze_enabled && panel->doze_mode == DSI_DOZE_LPM) {
-		dsi_panel_set_dimlayer_bl_backlight(panel, false);
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DOZE_LBM);
 		if (rc)
 			pr_err("[%s] failed to send DSI_CMD_SET_DOZE_LBM cmd, rc=%d\n",
@@ -784,7 +782,27 @@ int dsi_panel_update_doze(struct dsi_panel *panel) {
 	return rc;
 }
 
+bool resend_dc;
 int dsi_panel_set_doze_status(struct dsi_panel *panel, bool status) {
+	int rc = 0;
+	if (status && is_dimlayer_bl_enable) {
+		resend_dc = true;
+		is_dimlayer_bl_enable = false;
+	}
+
+	if (status && is_dimlayer_hbm_enabled) {
+		is_dimlayer_hbm_enabled = 0;
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DISP_HBM_FOD_OFF);
+		if (rc)
+			pr_err("[%s] failed to send DSI_CMD_SET_DISP_HBM_FOD_OFF cmd, rc=%d\n",
+					panel->name, rc);
+	}
+
+	if (!status && resend_dc) {
+		is_dimlayer_bl_enable = true;
+		resend_dc = false;
+	}
+
 	if (panel->doze_enabled == status)
 		return 0;
 
