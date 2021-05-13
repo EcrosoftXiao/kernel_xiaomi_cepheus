@@ -34,7 +34,6 @@ ramdisk_compression=auto;
 dump_boot;
 
 ## Screen OC
-patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=4"
 fr=$(cat /sdcard/framerate_override | tr -cd "[0-9]");
 [ $fr -eq 66 ] && ui_print "   Setting 66 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=1"
 [ $fr -eq 69 ] && ui_print "   Setting 69 Hz refresh rate" && patch_cmdline "msm_drm.framerate_override" "msm_drm.framerate_override=2"
