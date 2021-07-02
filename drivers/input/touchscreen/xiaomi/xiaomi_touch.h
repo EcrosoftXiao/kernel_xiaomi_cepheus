@@ -81,6 +81,8 @@ struct xiaomi_touch_pdata{
 	bool palm_changed;
 	int psensor_value;
 	bool psensor_changed;
+	bool set_update;
+	bool bump_sample_rate;
 	const char *name;
 };
 

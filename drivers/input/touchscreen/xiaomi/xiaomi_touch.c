@@ -280,15 +280,86 @@ struct device_attribute *attr, const char *buf, size_t count)
 	return count;
 }
 
+static ssize_t set_update_show(struct device *dev,
+struct device_attribute *attr, char *buf)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->set_update);
+}
+
+static ssize_t set_update_store(struct device *dev,
+struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	int input;
+	int ret;
+
+	ret = sscanf(buf, "%d", &input);
+
+	if (ret < 0)
+		return -EINVAL;
+
+	pdata->set_update = !!input;
+
+	return count;
+}
+
+static ssize_t bump_sample_rate_start(struct device *dev,
+struct device_attribute *attr, char *buf)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->bump_sample_rate);
+}
+
+static ssize_t bump_sample_rate_store(struct device *dev,
+struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	struct xiaomi_touch_interface *touch_data = pdata->touch_data;
+	int input;
+	int ret;
+
+	ret = sscanf(buf, "%d", &input);
+
+	if (ret < 0)
+		return -EINVAL; // Avoid possible crashes
+
+	if(input) {
+		pdata->bump_sample_rate = true;
+		pdata->set_update = true;
+		touch_data->setModeValue(0, 1);
+		touch_data->setModeValue(1, 1);
+		touch_data->setModeValue(3, 34);
+		touch_data->setModeValue(2, 99);
+		touch_data->setModeValue(7, 0);
+	} else {
+		pdata->bump_sample_rate = false;
+		pdata->set_update = false;
+		touch_data->resetMode(0);
+	}
+
+	return count;
+}
+
 static DEVICE_ATTR(palm_sensor, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   palm_sensor_show, palm_sensor_store);
 
 static DEVICE_ATTR(p_sensor, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   p_sensor_show, p_sensor_store);
 
+static DEVICE_ATTR(set_update, (S_IRUGO | S_IWUSR | S_IWGRP),
+		   set_update_show, set_update_store);
+
+static DEVICE_ATTR(bump_sample_rate, (S_IRUGO | S_IWUSR | S_IWGRP),
+		   bump_sample_rate_start, bump_sample_rate_store);
+
 static struct attribute *touch_attr_group[] = {
 	&dev_attr_palm_sensor.attr,
 	&dev_attr_p_sensor.attr,
+	&dev_attr_set_update.attr,
+	&dev_attr_bump_sample_rate.attr,
 	NULL,
 };
 
