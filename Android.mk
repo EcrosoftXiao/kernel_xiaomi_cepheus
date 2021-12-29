@@ -42,15 +42,15 @@ FRAMEWORK_GIT_VER := $(shell cd $(ANDROID_BUILD_TOP/)frameworks/base && git desc
 SIGMA_GIT_VER := $(shell cd $(LOCAL_PATH) && git describe --dirty=+)
 ifeq ($(SIGMA_GIT_VER),)
 ifeq ($(FRAMEWORK_GIT_VER),)
-SIGMA_VER = android-$(PLATFORM_VERSION)-$(TARGET_PRODUCT)-$(BUILD_ID)
+SIGMA_VER := android-$(PLATFORM_VERSION)-$(TARGET_BOARD_PLATFORM)-$(BUILD_ID)
 else
-SIGMA_VER = framework-$(FRAMEWORK_VER)
+SIGMA_VER := framework-$(FRAMEWORK_VER)
 endif
 else
 ifeq ($(FRAMEWORK_GIT_VER),)
-SIGMA_VER = android-$(PLATFORM_VERSION)-$(TARGET_PRODUCT)-$(BUILD_ID)-sigma-$(SIGMA_GIT_VER)
+SIGMA_VER := android-$(PLATFORM_VERSION)-$(TARGET_BOARD_PLATFORM)-$(BUILD_ID)-sigma-$(SIGMA_GIT_VER)
 else
-SIGMA_VER = framework-$(FRAMEWORK_GIT_VER)-sigma-$(SIGMA_GIT_VER)
+SIGMA_VER := framework-$(FRAMEWORK_GIT_VER)-sigma-$(SIGMA_GIT_VER)
 endif
 endif
 CFLAGS += -DSIGMA_DUT_VER=\"$(SIGMA_VER)\"
@@ -73,7 +73,10 @@ LOCAL_C_INCLUDES += \
 	$(LOCAL_PATH) external/libnl/include
 
 LOCAL_SHARED_LIBRARIES := libc libcutils libnl
+
+ifneq ($(BUILD_QEMU_IMAGES),true)
 LOCAL_STATIC_LIBRARIES := libpcap.vendor
+endif
 LOCAL_SHARED_LIBRARIES += libnetutils
 LOCAL_C_INCLUDES += $(LOCAL_PATH) system/core/include/netutils
 LOCAL_SHARED_LIBRARIES += libhardware_legacy
