@@ -7,7 +7,7 @@ properties() { '
 kernel.string=Evasi0nKernel
 do.devicecheck=1
 do.modules=0
-do.systemless=1
+do.systemless=0
 do.cleanup=1
 do.cleanuponabort=0
 device.name1=cepheus
@@ -20,8 +20,8 @@ supported.patchlevels=
 '; } # end properties
 
 # shell variables
-block=/dev/block/bootdevice/by-name/boot;
-is_slot_device=0;
+block=auto;
+is_slot_device=auto;
 ramdisk_compression=auto;
 
 
@@ -31,8 +31,10 @@ ramdisk_compression=auto;
 
 
 ## AnyKernel install
-dump_boot;
+split_boot;
 
-write_boot;
+mv $home/rd-new.cpio $home/ramdisk-new.cpio
+
+flash_boot;
 ## end install
 
