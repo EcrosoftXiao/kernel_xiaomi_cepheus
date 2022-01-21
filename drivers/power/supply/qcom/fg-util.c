@@ -1,5 +1,5 @@
 /* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- * Copyright (C) 2019 XiaoMi, Inc.
+ * Copyright (C) 2021 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -407,6 +407,8 @@ void fg_notify_charger(struct fg_dev *fg)
 			return;
 		}
 	}
+
+	fg_dbg(fg, FG_STATUS, "Notified charger on float voltage and FCC\n");
 
 	/*if (fg->bp.fastchg_curr_ma > 0) {
 		prop.intval = fg->bp.fastchg_curr_ma * 1000;
