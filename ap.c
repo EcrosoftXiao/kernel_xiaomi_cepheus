@@ -26,6 +26,7 @@
 #include <net/if.h>
 #include "wpa_ctrl.h"
 #include "wpa_helpers.h"
+#include "nl80211_copy.h"
 #ifdef ANDROID
 #include <hardware_legacy/wifi.h>
 #include <grp.h>
@@ -5412,6 +5413,10 @@ static int append_hostapd_conf_hs2(struct sigma_dut *dut, FILE *f)
 			"venue_url=10:https://bed-bath-and-beyond.r2m-testbed.wi-fi.org/floorplans/index.html\n"
 			);
 		break;
+	case 3:
+		fprintf(f,
+			"venue_url=1:http://the-great-mall.r2m-test bed.wi-fi.org/floorplans/index.html\n");
+		break;
 	}
 
 	switch (dut->ap_advice_of_charge) {
@@ -8445,7 +8450,8 @@ write_conf:
 				dut->ap_radius_port);
 		fprintf(f, "auth_server_shared_secret=%s\n",
 			dut->ap_radius_password);
-		if (dut->program == PROGRAM_HS2_R3) {
+		if (dut->program == PROGRAM_HS2_R3 ||
+		    dut->program == PROGRAM_HS2_R4) {
 			fprintf(f, "radius_das_port=3799\n");
 			fprintf(f, "radius_das_client=0.0.0.0 %s\n",
 				dut->ap_radius_password);
@@ -9886,7 +9892,7 @@ static enum sigma_cmd_result cmd_ap_reset_default(struct sigma_dut *dut,
 	dut->ap_ocvc = dut->user_config_ap_ocvc;
 
 	if (dut->program == PROGRAM_HS2 || dut->program == PROGRAM_HS2_R2 ||
-	    dut->program == PROGRAM_HS2_R3 ||
+	    dut->program == PROGRAM_HS2_R3 || dut->program == PROGRAM_HS2_R4 ||
 	    dut->program == PROGRAM_IOTLP) {
 		int i;
 
@@ -9944,7 +9950,7 @@ static enum sigma_cmd_result cmd_ap_reset_default(struct sigma_dut *dut,
 	}
 
 	if (dut->program == PROGRAM_HS2_R2 || dut->program == PROGRAM_HS2_R3 ||
-	    dut->program == PROGRAM_IOTLP) {
+	     dut->program == PROGRAM_HS2_R4 || dut->program == PROGRAM_IOTLP) {
 		int i;
 		const char hessid[] = "50:6f:9a:00:11:22";
 
@@ -10459,10 +10465,10 @@ int open_monitor(const char *ifname);
 #endif /* __linux__ */
 
 enum send_frame_type {
-		DISASSOC, DEAUTH, SAQUERY
+		DISASSOC, DEAUTH, SAQUERY, CHANNEL_SWITCH
 };
 enum send_frame_protection {
-	CORRECT_KEY, INCORRECT_KEY, UNPROTECTED
+	PROTECTION_NOT_SET, CORRECT_KEY, INCORRECT_KEY, UNPROTECTED
 };
 
 
@@ -10533,6 +10539,8 @@ static int ap_inject_frame(struct sigma_dut *dut, struct sigma_conn *conn,
 	case SAQUERY:
 		*pos++ = 0xd0;
 		break;
+	default:
+		return -1;
 	}
 
 	if (protected == INCORRECT_KEY)
@@ -10609,6 +10617,8 @@ static int ap_inject_frame(struct sigma_dut *dut, struct sigma_conn *conn,
 			*pos++ = 0x12;
 			*pos++ = 0x34;
 			break;
+		default:
+			return -1;
 		}
 	}
 
@@ -11222,8 +11232,10 @@ enum sigma_cmd_result cmd_ap_send_frame(struct sigma_dut *dut,
 	/* const char *ifname = get_param(cmd, "INTERFACE"); */
 	const char *val;
 	enum send_frame_type frame;
-	enum send_frame_protection protected;
+	enum send_frame_protection protected = PROTECTION_NOT_SET;
 	char buf[100];
+	unsigned int freq;
+	unsigned int chan;
 
 	val = get_param(cmd, "Program");
 	if (val) {
@@ -11254,6 +11266,8 @@ enum sigma_cmd_result cmd_ap_send_frame(struct sigma_dut *dut,
 		frame = DEAUTH;
 	else if (strcasecmp(val, "saquery") == 0)
 		frame = SAQUERY;
+	else if (strcasecmp(val, "ChannelSwitchAnncment") == 0)
+		frame = CHANNEL_SWITCH;
 	else {
 		send_resp(dut, conn, SIGMA_ERROR, "errorCode,Unsupported "
 			  "PMFFrameType");
@@ -11263,27 +11277,25 @@ enum sigma_cmd_result cmd_ap_send_frame(struct sigma_dut *dut,
 	val = get_param(cmd, "PMFProtected");
 	if (val == NULL)
 		val = get_param(cmd, "Protected");
-	if (val == NULL)
-		return -1;
-	if (strcasecmp(val, "Correct-key") == 0 ||
-	    strcasecmp(val, "CorrectKey") == 0)
-		protected = CORRECT_KEY;
-	else if (strcasecmp(val, "IncorrectKey") == 0)
-		protected = INCORRECT_KEY;
-	else if (strcasecmp(val, "Unprotected") == 0)
-		protected = UNPROTECTED;
-	else {
-		send_resp(dut, conn, SIGMA_ERROR, "errorCode,Unsupported "
-			  "PMFProtected");
-		return 0;
+	if (val) {
+		if (strcasecmp(val, "Correct-key") == 0 ||
+		    strcasecmp(val, "CorrectKey") == 0)
+			protected = CORRECT_KEY;
+		else if (strcasecmp(val, "IncorrectKey") == 0)
+			protected = INCORRECT_KEY;
+		else if (strcasecmp(val, "Unprotected") == 0)
+			protected = UNPROTECTED;
+		else {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Unsupported PMFProtected");
+			return STATUS_SENT_ERROR;
+		}
 	}
 
 	val = get_param(cmd, "stationID");
-	if (val == NULL)
-		return -1;
 
-	if (protected == INCORRECT_KEY ||
-	    (protected == UNPROTECTED && frame == SAQUERY))
+	if (val && (protected == INCORRECT_KEY ||
+		    (protected == UNPROTECTED && frame == SAQUERY)))
 		return ap_inject_frame(dut, conn, frame, protected, val);
 
 	switch (frame) {
@@ -11297,6 +11309,19 @@ enum sigma_cmd_result cmd_ap_send_frame(struct sigma_dut *dut,
 		break;
 	case SAQUERY:
 		snprintf(buf, sizeof(buf), "sa_query %s", val);
+		break;
+	case CHANNEL_SWITCH:
+		val = get_param(cmd, "channel");
+		if (!val)
+			return -1;
+		chan = atoi(val);
+		freq = channel_to_freq(dut, chan);
+		if (!freq) {
+			sigma_dut_print(dut, DUT_MSG_ERROR,
+					"Invalid channel: %d", chan);
+			return INVALID_SEND_STATUS;
+		}
+		snprintf(buf, sizeof(buf), "chan_switch 5 %d", freq);
 		break;
 	}
 
@@ -13586,22 +13611,34 @@ static enum sigma_cmd_result wcn_ap_set_rfeature(struct sigma_dut *dut,
 	val = get_param(cmd, "GI");
 	if (val) {
 		int fix_rate_sgi;
+		u8 he_gi_val;
+		u8 auto_rate_gi;
 
 		if (strcmp(val, "0.8") == 0) {
-			run_iwpriv(dut, ifname, "enable_short_gi 9");
 			fix_rate_sgi = 1;
+			auto_rate_gi = 9;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_0_8;
 		} else if (strcmp(val, "1.6") == 0) {
-			run_iwpriv(dut, ifname, "enable_short_gi 10");
 			fix_rate_sgi = 2;
+			auto_rate_gi = 10;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_1_6;
 		} else if (strcmp(val, "3.2") == 0) {
-			run_iwpriv(dut, ifname, "enable_short_gi 11");
 			fix_rate_sgi = 3;
+			auto_rate_gi = 11;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_3_2;
 		} else {
 			send_resp(dut, conn, SIGMA_ERROR,
 				  "errorCode,GI value not supported");
 			return STATUS_SENT_ERROR;
 		}
-		run_iwpriv(dut, ifname, "enable_short_gi %d", fix_rate_sgi);
+		if (wcn_set_he_gi(dut, ifname, he_gi_val)) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"wcn_set_he_gi failed, using iwpriv");
+			run_iwpriv(dut, ifname, "enable_short_gi %d",
+				   auto_rate_gi);
+			run_iwpriv(dut, ifname, "enable_short_gi %d",
+				   fix_rate_sgi);
+		}
 	}
 
 	val = get_param(cmd, "LTF");

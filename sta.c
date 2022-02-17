@@ -34,6 +34,7 @@
 #include "wpa_helpers.h"
 #include "miracast.h"
 #include "qca-vendor_copy.h"
+#include "nl80211_copy.h"
 
 /* Temporary files for sta_send_addba */
 #define VI_QOS_TMP_FILE     "/tmp/vi-qos.tmp"
@@ -1491,6 +1492,15 @@ static enum sigma_cmd_result cmd_sta_set_ip_config(struct sigma_dut *dut,
 			sigma_dut_print(dut, DUT_MSG_INFO, "Using IPv6 "
 					"stateless address autoconfiguration");
 #ifdef ANDROID
+			snprintf(buf, sizeof(buf),
+				 "sysctl net.ipv6.conf.%s.disable_ipv6=0",
+				 ifname);
+			sigma_dut_print(dut, DUT_MSG_DEBUG, "Run: %s", buf);
+			if (system(buf) != 0) {
+				sigma_dut_print(dut, DUT_MSG_DEBUG,
+						"Failed to enable IPv6 address");
+			}
+
 			/*
 			 * This sleep is required as the assignment in case of
 			 * Android is taking time and is done by the kernel.
@@ -5961,7 +5971,8 @@ cmd_sta_preset_testparameters(struct sigma_dut *dut, struct sigma_conn *conn,
 
 	val = get_param(cmd, "Program");
 	if (val && (strcasecmp(val, "HS2-R2") == 0 ||
-		    strcasecmp(val, "HS2-R3") == 0))
+		    strcasecmp(val, "HS2-R3") == 0 ||
+		    strcasecmp(val, "HS2-R4") == 0))
 		return cmd_sta_preset_testparameters_hs2_r2(dut, conn, intf,
 							    cmd);
 
@@ -8732,6 +8743,136 @@ static int sta_set_punctured_preamble_rx(struct sigma_dut *dut,
 }
 
 
+int wcn_set_he_gi(struct sigma_dut *dut, const char *intf, u8 gi_val)
+{
+ #ifdef NL80211_SUPPORT
+	struct nlattr *attr;
+	struct nlattr *attr1;
+	int ifindex, ret;
+	struct nl_msg *msg;
+
+	ifindex = if_nametoindex(intf);
+	if (ifindex == 0) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Index for interface %s failed",
+				__func__, intf);
+		return -1;
+	}
+
+	if (!(msg = nl80211_drv_msg(dut, dut->nl_ctx, ifindex, 0,
+				    NL80211_CMD_SET_TX_BITRATE_MASK)) ||
+	    !(attr = nla_nest_start(msg, NL80211_ATTR_TX_RATES))) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: NL80211_CMD_SET_TX_BITRATE_MASK msg failed",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "%s: Setting HE GI %d",
+			__func__, gi_val);
+
+	attr1 = nla_nest_start(msg, NL80211_BAND_2GHZ);
+	if (!attr1) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Netlink nest start failed for NL80211_BAND_2GHZ",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+	nla_put_u8(msg, NL80211_TXRATE_HE_GI, gi_val);
+	nla_nest_end(msg, attr1);
+
+	attr1 = nla_nest_start(msg, NL80211_BAND_5GHZ);
+	if (!attr1) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Netlink nest start failed for NL80211_BAND_5GHZ",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+	nla_put_u8(msg, NL80211_TXRATE_HE_GI, gi_val);
+	nla_nest_end(msg, attr1);
+
+	nla_nest_end(msg, attr);
+	ret = send_and_recv_msgs(dut, dut->nl_ctx, msg, NULL, NULL);
+	if (ret) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: send_and_recv_msgs failed, ret=%d",
+				__func__, ret);
+	}
+	return ret;
+#else /* NL80211_SUPPORT */
+	return -1;
+#endif /* NL80211_SUPPORT */
+}
+
+
+static int sta_set_vht_gi(struct sigma_dut *dut, const char *intf, u8 gi_val)
+{
+ #ifdef NL80211_SUPPORT
+	struct nlattr *attr;
+	struct nlattr *attr1;
+	int ifindex, ret;
+	struct nl_msg *msg;
+
+	ifindex = if_nametoindex(intf);
+	if (ifindex == 0) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Index for interface %s failed",
+				__func__, intf);
+		return -1;
+	}
+
+	if (!(msg = nl80211_drv_msg(dut, dut->nl_ctx, ifindex, 0,
+				    NL80211_CMD_SET_TX_BITRATE_MASK)) ||
+	    !(attr = nla_nest_start(msg, NL80211_ATTR_TX_RATES))) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: NL80211_CMD_SET_TX_BITRATE_MASK msg failed",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "%s: Setting VHT GI %d",
+			__func__, gi_val);
+
+	attr1 = nla_nest_start(msg, NL80211_BAND_2GHZ);
+	if (!attr1) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Netlink nest start failed for NL80211_BAND_2GHZ",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+	nla_put_u8(msg, NL80211_TXRATE_GI, gi_val);
+	nla_nest_end(msg, attr1);
+
+	attr1 = nla_nest_start(msg, NL80211_BAND_5GHZ);
+	if (!attr1) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: Netlink nest start failed for NL80211_BAND_5GHZ",
+				__func__);
+		nlmsg_free(msg);
+		return -1;
+	}
+	nla_put_u8(msg, NL80211_TXRATE_GI, gi_val);
+	nla_nest_end(msg, attr1);
+	nla_nest_end(msg, attr);
+
+	ret = send_and_recv_msgs(dut, dut->nl_ctx, msg, NULL, NULL);
+	if (ret) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"%s: send_and_recv_msgs failed, ret=%d",
+				__func__, ret);
+	}
+	return ret;
+#else /* NL80211_SUPPORT */
+	return -1;
+#endif /* NL80211_SUPPORT */
+}
+
+
 static void sta_reset_default_wcn(struct sigma_dut *dut, const char *intf,
 				  const char *type)
 {
@@ -8772,6 +8913,8 @@ static void sta_reset_default_wcn(struct sigma_dut *dut, const char *intf,
 		sta_set_scan_unicast_probe(dut, intf, 0);
 
 #ifdef NL80211_SUPPORT
+		nl80211_close_event_sock(dut);
+
 		/* Reset the device HE capabilities to its default supported
 		 * configuration. */
 		sta_set_he_testbed_def(dut, intf, 0);
@@ -9087,7 +9230,8 @@ static enum sigma_cmd_result cmd_sta_reset_default(struct sigma_dut *dut,
 	    lowi_cmd_sta_reset_default(dut, conn, cmd) < 0)
 		return ERROR_SEND_STATUS;
 
-	if (dut->program == PROGRAM_HS2_R2 || dut->program == PROGRAM_HS2_R3) {
+	if (dut->program == PROGRAM_HS2_R2 || dut->program == PROGRAM_HS2_R3 ||
+	    dut->program == PROGRAM_HS2_R4) {
 		unlink("SP/wi-fi.org/pps.xml");
 		if (system("rm -r SP/*") != 0) {
 		}
@@ -9190,13 +9334,14 @@ static enum sigma_cmd_result cmd_sta_reset_default(struct sigma_dut *dut,
 	set_ps(intf, dut, 0);
 
 	if (dut->program == PROGRAM_HS2 || dut->program == PROGRAM_HS2_R2 ||
-	    dut->program == PROGRAM_HS2_R3) {
+	    dut->program == PROGRAM_HS2_R3 || dut->program == PROGRAM_HS2_R4) {
 		wpa_command(intf, "SET interworking 1");
 		wpa_command(intf, "SET hs20 1");
 	}
 
 	if (dut->program == PROGRAM_HS2_R2 ||
 	    dut->program == PROGRAM_HS2_R3 ||
+	    dut->program == PROGRAM_HS2_R4 ||
 	    dut->program == PROGRAM_OCE) {
 		wpa_command(intf, "SET pmf 1");
 	} else {
@@ -9672,11 +9817,12 @@ static int wait_on_nl_socket(struct nl_sock *sock, struct sigma_dut *dut,
 
 static int twt_async_event_wait(struct sigma_dut *dut, unsigned int twt_op)
 {
-	struct nl_cb *cb;
+	struct nl_cb *cb = NULL;
 	int err_code = 0, select_retval = 0;
 	struct wait_event wait_info;
 
-	cb = nl_socket_get_cb(dut->nl_ctx->event_sock);
+	if (dut->nl_ctx->event_sock)
+		cb = nl_socket_get_cb(dut->nl_ctx->event_sock);
 	if (!cb) {
 		sigma_dut_print(dut, DUT_MSG_ERROR,
 				"event callback not found");
@@ -10289,9 +10435,18 @@ cmd_sta_set_wireless_vht(struct sigma_dut *dut, struct sigma_conn *conn,
 	val = get_param(cmd, "SGI80");
 	if (val) {
 		int sgi80;
+		enum nl80211_txrate_gi gi_val;
 
 		sgi80 = strcmp(val, "1") == 0 || strcasecmp(val, "Enable") == 0;
-		run_iwpriv(dut, intf, "shortgi %d", sgi80);
+		if (sgi80)
+			gi_val = NL80211_TXRATE_FORCE_LGI;
+		else
+			gi_val = NL80211_TXRATE_FORCE_SGI;
+		if (sta_set_vht_gi(dut, intf, (u8) gi_val)) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"sta_set_vht_gi failed, using iwpriv");
+			run_iwpriv(dut, intf, "shortgi %d", sgi80);
+		}
 	}
 
 	val = get_param(cmd, "TxBF");
@@ -13784,7 +13939,8 @@ enum sigma_cmd_result cmd_sta_send_frame(struct sigma_dut *dut,
 		return cmd_sta_send_frame_tdls(dut, conn, cmd);
 	if (val && (strcasecmp(val, "HS2") == 0 ||
 		    strcasecmp(val, "HS2-R2") == 0 ||
-		    strcasecmp(val, "HS2-R3") == 0))
+		    strcasecmp(val, "HS2-R3") == 0 ||
+		    strcasecmp(val, "HS2-R4") == 0))
 		return cmd_sta_send_frame_hs2(dut, conn, cmd);
 	if (val && strcasecmp(val, "VHT") == 0)
 		return cmd_sta_send_frame_vht(dut, conn, cmd);
@@ -13994,7 +14150,8 @@ int cmd_sta_set_parameter(struct sigma_dut *dut, struct sigma_conn *conn,
 	val = get_param(cmd, "program");
 	if (val && (strcasecmp(val, "HS2") == 0 ||
 		    strcasecmp(val, "HS2-R2") == 0 ||
-		    strcasecmp(val, "HS2-R3") == 0))
+		    strcasecmp(val, "HS2-R3") == 0 ||
+		    strcasecmp(val, "HS2-R4") == 0))
 		return cmd_sta_set_parameter_hs2(dut, conn, cmd, intf);
 
 	return -1;
@@ -14511,34 +14668,42 @@ wcn_sta_set_rfeature_he(const char *intf, struct sigma_dut *dut,
 	val = get_param(cmd, "GI");
 	if (val) {
 		int fix_rate_sgi;
+		u8 he_gi_val = 0;
 
 		if (strcmp(val, "0.8") == 0) {
 			snprintf(buf, sizeof(buf), "iwpriv %s shortgi 9", intf);
 			fix_rate_sgi = 1;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_0_8;
 		} else if (strcmp(val, "1.6") == 0) {
 			snprintf(buf, sizeof(buf), "iwpriv %s shortgi 10",
 				 intf);
 			fix_rate_sgi = 2;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_1_6;
 		} else if (strcmp(val, "3.2") == 0) {
 			snprintf(buf, sizeof(buf), "iwpriv %s shortgi 11",
 				 intf);
 			fix_rate_sgi = 3;
+			he_gi_val = NL80211_RATE_INFO_HE_GI_3_2;
 		} else {
 			send_resp(dut, conn, SIGMA_ERROR,
 				  "errorCode,GI value not supported");
 			return STATUS_SENT_ERROR;
 		}
-		if (system(buf) != 0) {
-			send_resp(dut, conn, SIGMA_ERROR,
-				  "errorCode,Failed to set shortgi");
-			return STATUS_SENT_ERROR;
-		}
-		snprintf(buf, sizeof(buf), "iwpriv %s shortgi %d",
-				intf, fix_rate_sgi);
-		if (system(buf) != 0) {
-			send_resp(dut, conn, SIGMA_ERROR,
-				  "errorCode,Failed to set fix rate shortgi");
-			return STATUS_SENT_ERROR;
+		if (wcn_set_he_gi(dut, intf, he_gi_val)) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"wcn_set_he_gi failed, using iwpriv");
+			if (system(buf) != 0) {
+				send_resp(dut, conn, SIGMA_ERROR,
+						"errorCode,Failed to set shortgi");
+				return STATUS_SENT_ERROR;
+			}
+			snprintf(buf, sizeof(buf), "iwpriv %s shortgi %d",
+					intf, fix_rate_sgi);
+			if (system(buf) != 0) {
+				send_resp(dut, conn, SIGMA_ERROR,
+						"errorCode,Failed to set fix rate shortgi");
+				return STATUS_SENT_ERROR;
+			}
 		}
 	}
 
@@ -14613,6 +14778,11 @@ wcn_sta_set_rfeature_he(const char *intf, struct sigma_dut *dut,
 
 	val = get_param(cmd, "TWT_Setup");
 	if (val) {
+#ifdef NL80211_SUPPORT
+		if (dut->sta_async_twt_supp && nl80211_open_event_sock(dut))
+			sigma_dut_print(dut, DUT_MSG_ERROR,
+					"Failed to open nl80211 event socket");
+#endif /* NL80211_SUPPORT */
 		if (strcasecmp(val, "Request") == 0) {
 			if (set_power_save_wcn(dut, intf, 1) < 0)
 				sigma_dut_print(dut, DUT_MSG_ERROR,
@@ -14633,6 +14803,11 @@ wcn_sta_set_rfeature_he(const char *intf, struct sigma_dut *dut,
 
 	val = get_param(cmd, "TWT_Operation");
 	if (val) {
+#ifdef NL80211_SUPPORT
+		if (dut->sta_async_twt_supp && nl80211_open_event_sock(dut))
+			sigma_dut_print(dut, DUT_MSG_ERROR,
+					"Failed to open nl80211 event socket");
+#endif /* NL80211_SUPPORT */
 		if (strcasecmp(val, "Suspend") == 0) {
 			if (sta_twt_suspend_or_nudge(dut, conn, cmd)) {
 				send_resp(dut, conn, SIGMA_ERROR,
@@ -15624,6 +15799,7 @@ static enum sigma_cmd_result cmd_sta_hs2_venue_info(struct sigma_dut *dut,
 	int info_avail = 0;
 	unsigned int old_timeout;
 	int res;
+	const char *events[] = { "RX-VENUE-URL", "ANQP-QUERY-DONE", NULL };
 
 	if (get_wpa_status(intf, "bssid", bssid, sizeof(bssid)) < 0) {
 		send_resp(dut, conn, SIGMA_ERROR,
@@ -15649,18 +15825,32 @@ static enum sigma_cmd_result cmd_sta_hs2_venue_info(struct sigma_dut *dut,
 
 	old_timeout = dut->default_timeout;
 	dut->default_timeout = 2;
-	res = get_wpa_cli_event(dut, ctrl, "RX-VENUE-URL", buf, sizeof(buf));
+	for (;;) {
+		res = get_wpa_cli_events(dut, ctrl, events, buf, sizeof(buf));
+		if (res < 0)
+			break;
+		if (strstr(buf, "ANQP-QUERY-DONE") != NULL) {
+			res = -1;
+			break;
+		}
+		pos = strchr(buf, ' ');
+		if (!pos)
+			continue;
+		pos++;
+		pos = strchr(pos, ' ');
+		if (!pos)
+			continue;
+		pos++;
+
+		if (strncmp(pos, "https://", 8) == 0)
+			break;
+
+		sigma_dut_print(dut, DUT_MSG_DEBUG,
+				"Ignore non-HTTPS venue URL: %s", pos);
+	}
 	dut->default_timeout = old_timeout;
 	if (res < 0)
 		goto done;
-	pos = strchr(buf, ' ');
-	if (!pos)
-		goto done;
-	pos++;
-	pos = strchr(pos, ' ');
-	if (!pos)
-		goto done;
-	pos++;
 	info_avail = 1;
 	snprintf(params, sizeof(params), "browser %s", pos);
 
@@ -15888,7 +16078,8 @@ static int sta_add_credential_sim(struct sigma_dut *dut,
 		return 0;
 	}
 
-	if (dut->program == PROGRAM_HS2_R2 || dut->program == PROGRAM_HS2_R3) {
+	if (dut->program == PROGRAM_HS2_R2 || dut->program == PROGRAM_HS2_R3 ||
+	    dut->program == PROGRAM_HS2_R4) {
 		/*
 		 * Set provisioning_sp for the test cases where SIM/USIM
 		 * provisioning is used.
