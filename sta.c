@@ -1289,6 +1289,8 @@ static void kill_dhcp_client(struct sigma_dut *dut, const char *ifname)
 			sleep(1);
 		}
 	}
+
+	dut->dhcp_client_running = 0;
 #endif /* __linux__ */
 }
 
@@ -1329,6 +1331,8 @@ static int start_dhcp_client(struct sigma_dut *dut, const char *ifname)
 #endif /* ANDROID */
 		}
 	}
+
+	dut->dhcp_client_running = 1;
 #endif /* __linux__ */
 
 	return 0;
@@ -1594,9 +1598,24 @@ static enum sigma_cmd_result cmd_sta_set_ip_config(struct sigma_dut *dut,
 	val = get_param(cmd, "primary-dns");
 	if (val) {
 #ifdef ANDROID
-		/* TODO */
-		sigma_dut_print(dut, DUT_MSG_INFO, "Ignored primary-dns %s "
-				"setting", val);
+		char dns_cmd[200];
+		int len;
+		char dnsmasq[100];
+
+		kill_pid(dut, concat_sigma_tmpdir(dut, "/sigma_dut-dnsmasq.pid",
+						  dnsmasq, sizeof(dnsmasq)));
+
+		len = snprintf(dns_cmd, sizeof(dns_cmd),
+			       "/system/bin/dnsmasq -uroot --no-resolv -S%s -x/%s", val,
+			       dnsmasq);
+		if (len < 0 || len >= sizeof(dns_cmd))
+			return ERROR_SEND_STATUS;
+		sigma_dut_print(dut, DUT_MSG_DEBUG, "Running %s", dns_cmd);
+		if (system(dns_cmd) != 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "ErrorCode,Failed to set primary-dns");
+			return STATUS_SENT_ERROR;
+		}
 #else /* ANDROID */
 		char dns_cmd[200];
 		int len;
@@ -4615,7 +4634,8 @@ static enum sigma_cmd_result cmd_sta_associate(struct sigma_dut *dut,
 
 		if ((dut->program == PROGRAM_WPA3 &&
 		     dut->sta_associate_wait_connect) ||
-		    dut->program == PROGRAM_QM) {
+		    dut->program == PROGRAM_QM ||
+		    (dut->dhcp_client_running && dut->client_privacy)) {
 			ctrl = open_wpa_mon(get_station_ifname(dut));
 			if (!ctrl)
 				return ERROR_SEND_STATUS;
@@ -4726,6 +4746,22 @@ static enum sigma_cmd_result cmd_sta_associate(struct sigma_dut *dut,
 		}
 
 		if (strstr(buf, "CTRL-EVENT-CONNECTED")) {
+			if (dut->dhcp_client_running && dut->client_privacy) {
+				/*
+				 * Interface MAC address will be changed by
+				 * wpa_supplicant before connection attempt when
+				 * client privacy enabled. Restart DHCP client
+				 * to make sure DHCP frames use the correct
+				 * source MAC address.
+				 * */
+				kill_dhcp_client(dut, ifname);
+				if (start_dhcp_client(dut, ifname) < 0) {
+					send_resp(dut, conn, SIGMA_COMPLETE,
+						  "Result,DHCP client start failed");
+					ret = STATUS_SENT_ERROR;
+					break;
+				}
+			}
 			if (tod >= 0) {
 				sigma_dut_print(dut, DUT_MSG_DEBUG,
 						"Network profile TOD policy update: %d -> %d",
@@ -5951,22 +5987,28 @@ cmd_sta_preset_testparameters(struct sigma_dut *dut, struct sigma_conn *conn,
 
 	val = get_param(cmd, "FT_DS");
 	if (val) {
+		int sta_ft_ds;
+
 		if (strcasecmp(val, "Enable") == 0) {
-			dut->sta_ft_ds = 1;
+			sta_ft_ds = 1;
 		} else if (strcasecmp(val, "Disable") == 0) {
-			dut->sta_ft_ds = 0;
+			sta_ft_ds = 0;
 		} else {
 			send_resp(dut, conn, SIGMA_ERROR,
 				  "errorCode,Unsupported value for FT_DS");
 			return STATUS_SENT_ERROR;
 		}
-		if (get_driver_type(dut) == DRIVER_WCN &&
+
+		if (dut->sta_ft_ds != sta_ft_ds &&
+		    get_driver_type(dut) == DRIVER_WCN &&
 		    sta_config_params(dut, intf, STA_SET_FT_DS,
-				      dut->sta_ft_ds) != 0) {
+				      sta_ft_ds) != 0) {
 			send_resp(dut, conn, SIGMA_ERROR,
 				  "errorCode,Failed to enable/disable FT_DS");
 			return STATUS_SENT_ERROR;
 		}
+
+		dut->sta_ft_ds = sta_ft_ds;
 	}
 
 	val = get_param(cmd, "Program");
@@ -6420,6 +6462,35 @@ cmd_sta_preset_testparameters(struct sigma_dut *dut, struct sigma_conn *conn,
 	val = get_param(cmd, "DSCPPolicyResp_StatusCode");
 	if (val)
 		dut->dscp_reject_resp_code = atoi(val);
+
+	val = get_param(cmd, "Deauth_Reconnect_Policy");
+	if (val) {
+		char buf[35];
+		int len;
+
+		if (strcasecmp(val, "0") == 0) {
+			len = snprintf(buf, sizeof(buf),
+				       "STA_AUTOCONNECT %d",
+				       dut->autoconnect_default);
+		} else if (strcasecmp(val, "1") == 0) {
+			len = snprintf(buf, sizeof(buf),
+				       "STA_AUTOCONNECT 0");
+		} else if (strcasecmp(val, "2") == 0) {
+			len = snprintf(buf, sizeof(buf),
+				       "STA_AUTOCONNECT 1");
+		} else {
+			sigma_dut_print(dut, DUT_MSG_ERROR,
+					"Invalid Deauth_Reconnect_Policy");
+			return INVALID_SEND_STATUS;
+		}
+
+		if (len < 0 || len >= sizeof(buf) ||
+		    wpa_command(intf, buf) != 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "ErrorCode,Failed to update Deauth_Reconnect_Policy");
+			return STATUS_SENT_ERROR;
+		}
+	}
 
 	return 1;
 }
@@ -9170,6 +9241,11 @@ static enum sigma_cmd_result cmd_sta_reset_default(struct sigma_dut *dut,
 	char buf[100];
 	int ret;
 
+#ifdef ANDROID
+	kill_pid(dut, concat_sigma_tmpdir(dut, "/sigma_dut-dnsmasq.pid",
+					  buf, sizeof(buf)));
+#endif /* ANDROID */
+
 	if (dut->station_ifname_2g &&
 	    strcmp(dut->station_ifname_2g, intf) == 0)
 		dut->use_5g = 0;
@@ -9395,6 +9471,7 @@ static enum sigma_cmd_result cmd_sta_reset_default(struct sigma_dut *dut,
 	dut->dpp_local_bootstrap = -1;
 	wpa_command(intf, "SET dpp_config_processing 2");
 	wpa_command(intf, "SET dpp_mud_url ");
+	dpp_mdns_stop(dut);
 
 	wpa_command(intf, "VENDOR_ELEM_REMOVE 13 *");
 
@@ -9472,6 +9549,11 @@ static enum sigma_cmd_result cmd_sta_reset_default(struct sigma_dut *dut,
 	dut->saquery_oci_freq = 0;
 	dut->prev_disable_scs_support = 0;
 	dut->prev_disable_mscs_support = 0;
+
+	if (dut->autoconnect_default)
+		wpa_command(intf, "STA_AUTOCONNECT 1");
+	else
+		wpa_command(intf, "STA_AUTOCONNECT 0");
 
 	if (dut->program != PROGRAM_VHT)
 		return cmd_sta_p2p_reset(dut, conn, cmd);
@@ -11166,6 +11248,20 @@ sta_set_wireless_wpa3(struct sigma_dut *dut, struct sigma_conn *conn,
 		return STATUS_SENT_ERROR;
 	}
 
+	val = get_param(cmd, "GKH_G2_Tx");
+	if (val) {
+		char buf[50];
+
+		snprintf(buf, sizeof(buf), "SET disable_eapol_g2_tx %d",
+			 strcasecmp(val, "disable") == 0);
+
+		if (wpa_command(intf, buf) < 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Failed to enable/disable G2 transmit");
+			return STATUS_SENT_ERROR;
+		}
+	}
+
 	return cmd_sta_set_wireless_common(intf, dut, conn, cmd);
 }
 
@@ -11177,6 +11273,8 @@ static enum sigma_cmd_result cmd_sta_set_wireless(struct sigma_dut *dut,
 	const char *val;
 
 	val = get_param(cmd, "Program");
+	if (!val)
+		val = get_param(cmd, "Prog");
 	if (val) {
 		if (strcasecmp(val, "11n") == 0)
 			return cmd_sta_set_11n(dut, conn, cmd);

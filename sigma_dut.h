@@ -397,6 +397,12 @@ struct dscp_policy_data {
 	struct dscp_policy_data *next;
 };
 
+enum dpp_mdns_role {
+	DPP_MDNS_NOT_RUNNING,
+	DPP_MDNS_RELAY,
+	DPP_MDNS_CONTROLLER,
+};
+
 struct sigma_dut {
 	const char *main_ifname;
 	char *main_ifname_2g;
@@ -989,6 +995,7 @@ struct sigma_dut {
 	int dpp_local_bootstrap;
 	int dpp_conf_id;
 	int dpp_network_id;
+	enum dpp_mdns_role dpp_mdns;
 
 	u8 fils_hlp;
 	pthread_t hlp_thread;
@@ -1042,6 +1049,8 @@ struct sigma_dut {
 	unsigned int prev_disable_scs_support;
 	unsigned int prev_disable_mscs_support;
 	int dscp_use_iptables;
+	int autoconnect_default;
+	int dhcp_client_running;
 };
 
 
@@ -1235,6 +1244,7 @@ void str_remove_chars(char *str, char ch);
 
 int get_wps_forced_version(struct sigma_dut *dut, const char *str);
 int base64_encode(const char *src, size_t len, char *out, size_t out_len);
+unsigned char * base64_decode(const char *src, size_t len, size_t *out_len);
 int random_get_bytes(char *buf, size_t len);
 int get_enable_disable(const char *val);
 int wcn_driver_cmd(const char *ifname, char *buf);
@@ -1276,6 +1286,9 @@ int lowi_cmd_sta_reset_default(struct sigma_dut *dut, struct sigma_conn *conn,
 enum sigma_cmd_result dpp_dev_exec_action(struct sigma_dut *dut,
 					  struct sigma_conn *conn,
 					  struct sigma_cmd *cmd);
+int dpp_mdns_discover_relay_params(struct sigma_dut *dut);
+int dpp_mdns_start(struct sigma_dut *dut, enum dpp_mdns_role role);
+void dpp_mdns_stop(struct sigma_dut *dut);
 
 /* dhcp.c */
 void process_fils_hlp(struct sigma_dut *dut);
@@ -1311,5 +1324,6 @@ void server_register_cmds(void);
 void miracast_register_cmds(void);
 int set_ipv6_addr(struct sigma_dut *dut, const char *ip, const char *mask,
 		  const char *ifname);
+void kill_pid(struct sigma_dut *dut, const char *pid_file);
 
 #endif /* SIGMA_DUT_H */
