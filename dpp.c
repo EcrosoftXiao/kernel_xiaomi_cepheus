@@ -19,6 +19,193 @@ char *dpp_qrcode_file = "/sdcard/wpadebug_qrdata.txt";
 #endif /* ANDROID */
 
 
+static const char * dpp_mdns_role_txt(enum dpp_mdns_role role)
+{
+	switch (role) {
+	case DPP_MDNS_NOT_RUNNING:
+		break;
+	case DPP_MDNS_RELAY:
+		return "relay";
+	case DPP_MDNS_CONTROLLER:
+		return "controller";
+	}
+	return "unknown";
+}
+
+
+static int dpp_mdns_discover(struct sigma_dut *dut, enum dpp_mdns_role role,
+			     char *addr, size_t addr_size, unsigned char *hash)
+{
+	char cmd[200], buf[10000], *pos, *pos2, *pos3;
+	char *ifname = NULL, *ipaddr = NULL, *bskeyhash = NULL;
+	size_t len;
+	FILE *f;
+
+	snprintf(cmd, sizeof(cmd), "avahi-browse _%s._sub._dpp._tcp -r -t -p",
+		 dpp_mdns_role_txt(role));
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "Run: %s", cmd);
+	f = popen(cmd, "r");
+	if (!f) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"Could not run avahi-browse: %s",
+				strerror(errno));
+		return -1;
+	}
+	len = fread(buf, 1, sizeof(buf) - 1, f);
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "avahi-browse returned %zu octets",
+			len);
+	pclose(f);
+	if (!len)
+		return -1;
+	buf[len] = '\0';
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "mDNS results:\n%s", buf);
+
+	pos = buf;
+	while (pos) {
+		pos2 = strchr(pos, '\n');
+		if (pos2)
+			*pos2 = '\0';
+		if (pos[0] != '=')
+			goto next;
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* ifname */
+		pos3 = strchr(pos, ';');
+		if (!pos3)
+			goto next;
+		*pos3 = '\0';
+		ifname = pos;
+
+		pos = pos3 + 1;
+		/* IP version */
+		if (strncmp(pos, "IPv4;", 5) != 0)
+			goto next;
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* name */
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* service */
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* local? */
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* fqdn */
+
+		pos = strchr(pos, ';');
+		if (!pos)
+			goto next;
+		pos++;
+		/* IP address */
+
+		pos3 = strchr(pos, ';');
+		if (!pos3)
+			goto next;
+		*pos3 = '\0';
+		ipaddr = pos;
+		pos = pos3 + 1;
+
+		pos = strstr(pos, "\"bskeyhash=");
+		if (pos) {
+			pos += 11;
+			pos3 = strchr(pos, '"');
+			if (pos3)
+				*pos3 = '\0';
+			bskeyhash = pos;
+		}
+
+		/* Could try to pick the most appropriate candidate if multiple
+		 * entries are discovered */
+		break;
+
+	next:
+		if (!pos2)
+			break;
+		pos = pos2 + 1;
+	}
+
+	if (!ipaddr)
+		return -1;
+	sigma_dut_print(dut, DUT_MSG_INFO, "Discovered (mDNS) service at %s@%s",
+			ipaddr, ifname);
+	if (bskeyhash && hash) {
+		unsigned char *bin;
+		size_t bin_len;
+
+		sigma_dut_print(dut, DUT_MSG_DEBUG, "bskeyhash: %s", bskeyhash);
+
+		bin = base64_decode(bskeyhash, strlen(bskeyhash), &bin_len);
+		if (!bin || bin_len != 32) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"Invalid bskeyhash value in mDNS records");
+			free(bin);
+			return -1;
+		}
+
+		memcpy(hash, bin, bin_len);
+		free(bin);
+	}
+	strlcpy(addr, ipaddr, addr_size);
+
+	return 0;
+}
+
+
+int dpp_mdns_discover_relay_params(struct sigma_dut *dut)
+{
+	char tcp_addr[30];
+	unsigned char hash[32];
+
+	if (dpp_mdns_discover(dut, DPP_MDNS_CONTROLLER,
+			      tcp_addr, sizeof(tcp_addr), hash) < 0) {
+		sigma_dut_print(dut, DUT_MSG_INFO,
+				"Could not discover Controller IP address using mDNS");
+		return -1;
+	}
+
+	free(dut->ap_dpp_conf_addr);
+	dut->ap_dpp_conf_addr = strdup(tcp_addr);
+
+	free(dut->ap_dpp_conf_pkhash);
+	dut->ap_dpp_conf_pkhash = malloc(2 * 32 + 1);
+	if (dut->ap_dpp_conf_pkhash) {
+		int i;
+		char *pos = dut->ap_dpp_conf_pkhash;
+		char *end = pos + 2 * 32 + 1;
+
+		for (i = 0; i < 32; i++)
+			pos += snprintf(pos, end - pos, "%02x", hash[i]);
+		*pos = '\0';
+	}
+
+	if (dut->ap_dpp_conf_addr && dut->ap_dpp_conf_pkhash) {
+		sigma_dut_print(dut, DUT_MSG_INFO,
+				"Controller discovered using mDNS: %s (pkhash %s)",
+				dut->ap_dpp_conf_addr,
+				dut->ap_dpp_conf_pkhash);
+		return 0;
+	}
+
+	return -1;
+}
+
+
 static int sigma_dut_is_ap(struct sigma_dut *dut)
 {
 	return dut->device_type == AP_unknown ||
@@ -31,6 +218,14 @@ static int dpp_hostapd_run(struct sigma_dut *dut)
 {
 	if (dut->hostapd_running)
 		return 0;
+
+	if (dut->ap_dpp_conf_addr &&
+	    strcasecmp(dut->ap_dpp_conf_addr, "mDNS") == 0 &&
+	    dpp_mdns_discover_relay_params(dut) < 0) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"Failed to discover Controller for AP Relay using mDNS - cannot start hostapd");
+		return -1;
+	}
 
 	sigma_dut_print(dut, DUT_MSG_INFO,
 			"Starting hostapd in unconfigured state for DPP");
@@ -88,6 +283,7 @@ dpp_get_local_bootstrap(struct sigma_dut *dut, struct sigma_conn *conn,
 			struct sigma_cmd *cmd, int send_result, int *success)
 {
 	const char *curve = dpp_get_curve(cmd, "DPPCryptoIdentifier");
+	const char *uri_curves = get_param(cmd, "DPPURICurves");
 	const char *bs = get_param(cmd, "DPPBS");
 	const char *chan_list = get_param(cmd, "DPPChannelList");
 	const char *tcp = get_param(cmd, "DPPOverTCP");
@@ -155,10 +351,12 @@ dpp_get_local_bootstrap(struct sigma_dut *dut, struct sigma_conn *conn,
 	    (strcmp(chan_list, "0/0") == 0 || chan_list[0] == '\0')) {
 		/* No channel list */
 		res = snprintf(buf, sizeof(buf),
-			       "DPP_BOOTSTRAP_GEN type=%s curve=%s%s%s",
+			       "DPP_BOOTSTRAP_GEN type=%s curve=%s%s%s%s%s",
 			       type, curve,
 			       include_mac ? " mac=" : "",
-			       include_mac ? mac : "");
+			       include_mac ? mac : "",
+			       uri_curves ? " supported_curves=" : "",
+			       uri_curves ? uri_curves : "");
 	} else if (chan_list) {
 		/* Channel list override (CTT case) - space separated tuple(s)
 		 * of OperatingClass/Channel; convert to wpa_supplicant/hostapd
@@ -169,9 +367,11 @@ dpp_get_local_bootstrap(struct sigma_dut *dut, struct sigma_conn *conn,
 				*pos = ',';
 		}
 		res = snprintf(buf, sizeof(buf),
-			       "DPP_BOOTSTRAP_GEN type=%s curve=%s chan=%s%s%s",
+			       "DPP_BOOTSTRAP_GEN type=%s curve=%s chan=%s%s%s%s%s",
 			       type, curve, resp, include_mac ? " mac=" : "",
-			       include_mac ? mac : "");
+			       include_mac ? mac : "",
+			       uri_curves ? " supported_curves=" : "",
+			       uri_curves ? uri_curves : "");
 	} else {
 		int channel = 11;
 
@@ -181,9 +381,11 @@ dpp_get_local_bootstrap(struct sigma_dut *dut, struct sigma_conn *conn,
 		    dut->ap_channel > 0 && dut->ap_channel <= 13)
 			channel = dut->ap_channel;
 		res = snprintf(buf, sizeof(buf),
-			       "DPP_BOOTSTRAP_GEN type=%s curve=%s chan=81/%d%s%s",
+			       "DPP_BOOTSTRAP_GEN type=%s curve=%s chan=81/%d%s%s%s%s",
 			       type, curve, channel, include_mac ? " mac=" : "",
-			       include_mac ? mac : "");
+			       include_mac ? mac : "",
+			       uri_curves ? " supported_curves=" : "",
+			       uri_curves ? uri_curves : "");
 	}
 
 	if (res < 0 || res >= sizeof(buf) ||
@@ -198,6 +400,12 @@ dpp_get_local_bootstrap(struct sigma_dut *dut, struct sigma_conn *conn,
 		return ERROR_SEND_STATUS;
 
 	sigma_dut_print(dut, DUT_MSG_DEBUG, "URI: %s", resp);
+
+	if (dut->dpp_mdns == DPP_MDNS_CONTROLLER) {
+		/* Update mDNS advertisement since the local boostrapping key
+		 * has changed. */
+		dpp_mdns_start(dut, DPP_MDNS_CONTROLLER);
+	}
 
 	if (send_result) {
 		ascii2hexstr(resp, hex);
@@ -607,6 +815,8 @@ static const struct dpp_test_info dpp_tests[] = {
 	{ "MissingAttribute", "PeerDiscoveryResponse", "ProtocolVersion", 93 },
 	{ "InvalidValue", "PeerDiscoveryRequest", "ProtocolVersion", 94 },
 	{ "InvalidValue", "PeerDiscoveryResponse", "ProtocolVersion", 95 },
+	{ "InvalidValue", "ReconfigAuthRequest", "ProtocolVersion", 96 },
+	{ "MissingAttribute", "ReconfigAuthRequest", "ProtocolVersion", 97 },
 	{ NULL, NULL, NULL, 0 }
 };
 
@@ -1145,6 +1355,7 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 	FILE *f;
 	char *no_mud_url = "";
 	char *mud_url = no_mud_url;
+	char tcp_addr[30];
 
 	time(&start);
 
@@ -1221,9 +1432,19 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 	if (strcasecmp(prov_role, "Configurator") == 0 ||
 	    strcasecmp(prov_role, "Both") == 0) {
 		if (dut->dpp_conf_id < 0) {
-			snprintf(buf, sizeof(buf),
-				 "DPP_CONFIGURATOR_ADD curve=%s",
-				 dpp_get_curve(cmd, "DPPSigningKeyECC"));
+			if (get_param(cmd, "DPPNAKECC")) {
+				snprintf(buf, sizeof(buf),
+					 "DPP_CONFIGURATOR_ADD curve=%s net_access_key_curve=%s",
+					 dpp_get_curve(cmd,
+						       "DPPSigningKeyECC"),
+					 dpp_get_curve(cmd,
+						       "DPPNAKECC"));
+			} else {
+				snprintf(buf, sizeof(buf),
+					 "DPP_CONFIGURATOR_ADD curve=%s",
+					 dpp_get_curve(cmd,
+						       "DPPSigningKeyECC"));
+			}
 			if (wpa_command_resp(ifname, buf,
 					     buf, sizeof(buf)) < 0) {
 				send_resp(dut, conn, SIGMA_ERROR,
@@ -1231,6 +1452,12 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 				return STATUS_SENT_ERROR;
 			}
 			dut->dpp_conf_id = atoi(buf);
+		} else if (get_param(cmd, "DPPNAKECC")) {
+			snprintf(buf, sizeof(buf),
+				 "DPP_CONFIGURATOR_SET %d net_access_key_curve=%s",
+				 dut->dpp_conf_id,
+				 dpp_get_curve(cmd, "DPPNAKECC"));
+			wpa_command(ifname, buf);
 		}
 		if (strcasecmp(prov_role, "Configurator") == 0)
 			role = "configurator";
@@ -1242,6 +1469,24 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 		send_resp(dut, conn, SIGMA_ERROR,
 			  "errorCode,Unknown DPPProvisioningRole");
 		return STATUS_SENT_ERROR;
+	}
+
+	if (auth_role && strcasecmp(auth_role, "Initiator") == 0 &&
+	    tcp && strcasecmp(tcp, "mDNS") == 0) {
+		enum dpp_mdns_role role;
+
+		/* Discover Controller/Relay IP address using mDNS */
+		if (strcasecmp(prov_role, "Configurator") == 0)
+			role = DPP_MDNS_RELAY;
+		else
+			role = DPP_MDNS_CONTROLLER;
+		if (dpp_mdns_discover(dut, role,
+				      tcp_addr, sizeof(tcp_addr), NULL) < 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Could not discover Controller/Relay IP address using mDNS");
+			return STATUS_SENT_ERROR;
+		}
+		tcp = tcp_addr;
 	}
 
 	pkex_identifier[0] = '\0';
@@ -2129,8 +2374,9 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 
 		if (is_pkex_bs(bs)) {
 			snprintf(buf, sizeof(buf),
-				 "DPP_PKEX_ADD own=%d role=%s %scode=%s",
-				 own_pkex_id, role, pkex_identifier, pkex_code);
+				 "DPP_PKEX_ADD own=%d%s role=%s %scode=%s",
+				 own_pkex_id, pkex_ver, role,
+				 pkex_identifier, pkex_code);
 			if (wpa_command(ifname, buf) < 0) {
 				send_resp(dut, conn, SIGMA_ERROR,
 					  "errorCode,Failed to configure DPP PKEX");
@@ -2490,8 +2736,15 @@ static enum sigma_cmd_result dpp_automatic_dpp(struct sigma_dut *dut,
 		memcpy(mud_url, ",MUDURL,", 8);
 		memcpy(mud_url + 8, pos, url_len + 1);
 
-		res = get_wpa_cli_events(dut, ctrl, conf_events,
-					 buf, sizeof(buf));
+		/* DPP-MUD-URL can be returned multiple times when configuration
+		 * exchange needs to perform multiple GAS queries, e.g., for
+		 * CSR or key changes. */
+		for (;;) {
+			res = get_wpa_cli_events(dut, ctrl, conf_events,
+						 buf, sizeof(buf));
+			if (res < 0 || !strstr(buf, "DPP-MUD-URL "))
+				break;
+		}
 	}
 	if (res < 0) {
 		send_resp(dut, conn, SIGMA_COMPLETE,
@@ -2772,6 +3025,9 @@ dpp_reconfigure_configurator(struct sigma_dut *dut, struct sigma_conn *conn,
 			     struct sigma_cmd *cmd)
 {
 	const char *val;
+	const char *step = get_param(cmd, "DPPStep");
+	const char *frametype = get_param(cmd, "DPPFrameType");
+	const char *attr = get_param(cmd, "DPPIEAttribute");
 	int freq;
 	struct wpa_ctrl *ctrl = NULL;
 	const char *ifname;
@@ -3027,6 +3283,26 @@ dpp_reconfigure_configurator(struct sigma_dut *dut, struct sigma_conn *conn,
 		}
 	}
 
+	if (step) {
+		int test;
+
+		test = dpp_get_test(step, frametype, attr);
+		if (test <= 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Unsupported DPPStep/DPPFrameType/DPPIEAttribute");
+			goto out;
+		}
+
+		snprintf(buf, sizeof(buf), "SET dpp_test %d", test);
+		if (wpa_command(ifname, buf) < 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Failed to set dpp_test");
+			goto out;
+		}
+	} else {
+		wpa_command(ifname, "SET dpp_test 0");
+	}
+
 	snprintf(buf, sizeof(buf),
 		 "SET dpp_configurator_params  conf=%s %s %s configurator=%d%s%s%s%s%s",
 		 conf_role, conf_ssid, conf_pass,
@@ -3062,6 +3338,17 @@ dpp_reconfigure_configurator(struct sigma_dut *dut, struct sigma_conn *conn,
 				  "errorCode,Could not start listen state");
 			goto out;
 		}
+	}
+
+	if (frametype && strcasecmp(frametype, "ReconfigAuthRequest") == 0) {
+		const char *result;
+
+		if (dpp_wait_tx_status(dut, ctrl, 15) < 0)
+			result = "ReconfigAuthResult,Timeout";
+		else
+			result = "ReconfigAuthResult,Errorsent";
+		send_resp(dut, conn, SIGMA_COMPLETE, result);
+		goto out;
 	}
 
 	res = get_wpa_cli_event(dut, ctrl, "DPP-CONF-REQ-RX",
@@ -3269,6 +3556,186 @@ out:
 }
 
 
+#define AVAHI_SERVICE "/etc/avahi/services/sigma_dut-dpp.service"
+
+int dpp_mdns_start(struct sigma_dut *dut, enum dpp_mdns_role role)
+{
+	FILE *f;
+	const char *org = "Qualcomm DPP testing";
+	const char *location = "Somewhere in the test network";
+	const char *bskeyhash = NULL;
+	const char *ifname = get_station_ifname(dut);
+	char buf[2000];
+
+	if (sigma_dut_is_ap(dut)) {
+		if (!dut->hostapd_ifname) {
+			sigma_dut_print(dut, DUT_MSG_ERROR,
+					"hostapd ifname not specified (-j)");
+			return -1;
+		}
+		ifname = dut->hostapd_ifname;
+	}
+
+	if (role == DPP_MDNS_CONTROLLER && dut->dpp_local_bootstrap >= 0) {
+		char *pos, *pos2;
+		unsigned char pkhash[32];
+		int pkhash_len = -1;
+
+		snprintf(buf, sizeof(buf), "DPP_BOOTSTRAP_INFO %d",
+			 dut->dpp_local_bootstrap);
+		if (wpa_command_resp(ifname, buf, buf, sizeof(buf)) < 0 ||
+		    strncmp(buf, "FAIL", 4) == 0) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"Failed to get bootstrap information");
+			return -1;
+		}
+
+		pos = buf;
+		while (pos) {
+			pos2 = strchr(pos, '\n');
+			if (pos2)
+				*pos2 = '\0';
+			if (strncmp(pos, "pkhash=", 7) == 0) {
+				pkhash_len = parse_hexstr(pos + 7, pkhash,
+							  sizeof(pkhash));
+				break;
+			}
+
+			if (!pos2)
+				break;
+			pos = pos2 + 1;
+		}
+
+		if (pkhash_len != 32 ||
+		    base64_encode((char *) pkhash, pkhash_len,
+				  buf, sizeof(buf)) < 0) {
+			sigma_dut_print(dut, DUT_MSG_INFO,
+					"Failed to get own bootstrapping public key hash");
+			return -1;
+		}
+
+		bskeyhash = buf;
+	}
+
+	f = fopen(AVAHI_SERVICE, "w");
+	if (!f) {
+		sigma_dut_print(dut, DUT_MSG_INFO,
+				"Could not write Avahi service file (%s)",
+				AVAHI_SERVICE);
+		return -1;
+	}
+
+	fprintf(f, "<?xml version=\"1.0\" standalone=\"no\"?>\n");
+	fprintf(f, "<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n");
+	fprintf(f, "<service-group>\n");
+	fprintf(f, "  <name replace-wildcards=\"yes\">%%h</name>\n");
+	fprintf(f, "  <service>\n");
+	fprintf(f, "    <type>_dpp._tcp</type>\n");
+	fprintf(f, "    <subtype>_%s._sub._dpp._tcp</subtype>\n",
+		dpp_mdns_role_txt(role));
+	fprintf(f, "    <port>8908</port>\n");
+	fprintf(f, "    <txt-record>txtversion=1</txt-record>\n");
+	fprintf(f, "    <txt-record>organization=%s</txt-record>\n", org);
+	fprintf(f, "    <txt-record>location=%s</txt-record>\n", location);
+	if (bskeyhash)
+		fprintf(f, "    <txt-record>bskeyhash=%s</txt-record>\n",
+			bskeyhash);
+	fprintf(f, "  </service>\n");
+	fprintf(f, "</service-group>\n");
+
+	fclose(f);
+
+	sigma_dut_print(dut, DUT_MSG_INFO, "Started DPP mDNS advertisement");
+	dut->dpp_mdns = role;
+
+	return 0;
+}
+
+
+void dpp_mdns_stop(struct sigma_dut *dut)
+{
+	dut->dpp_mdns = DPP_MDNS_NOT_RUNNING;
+
+	if (file_exists(AVAHI_SERVICE)) {
+		sigma_dut_print(dut, DUT_MSG_INFO,
+				"Stopping DPP mDNS service advertisement");
+		unlink(AVAHI_SERVICE);
+	}
+}
+
+
+static enum sigma_cmd_result dpp_set_mdns_advertise(struct sigma_dut *dut,
+						    struct sigma_conn *conn,
+						    struct sigma_cmd *cmd,
+						    const char *role)
+{
+	int ret = -1;
+
+	if (strcasecmp(role, "Relay") == 0) {
+		ret = dpp_mdns_start(dut, DPP_MDNS_RELAY);
+	} else if (strcasecmp(role, "Controller") == 0) {
+		const char *curve = dpp_get_curve(cmd, "DPPCryptoIdentifier");
+
+		if (sigma_dut_is_ap(dut) && dpp_hostapd_run(dut) < 0) {
+			send_resp(dut, conn, SIGMA_ERROR,
+				  "errorCode,Failed to start hostapd");
+			return STATUS_SENT_ERROR;
+		}
+
+		if (dut->dpp_local_bootstrap < 0) {
+			char buf[200], resp[200];
+			int res;
+			const char *ifname = get_station_ifname(dut);
+
+			if (sigma_dut_is_ap(dut)) {
+				if (!dut->hostapd_ifname) {
+					sigma_dut_print(dut, DUT_MSG_ERROR,
+							"hostapd ifname not specified (-j)");
+					return ERROR_SEND_STATUS;
+				}
+				ifname = dut->hostapd_ifname;
+			}
+
+
+			res = snprintf(buf, sizeof(buf),
+				       "DPP_BOOTSTRAP_GEN type=qrcode curve=%s",
+				       curve);
+			if (res < 0 || res >= sizeof(buf) ||
+			    wpa_command_resp(ifname, buf, resp,
+					     sizeof(resp)) < 0 ||
+			    strncmp(resp, "FAIL", 4) == 0) {
+				sigma_dut_print(dut, DUT_MSG_INFO,
+						"Failed to generate own bootstrapping key");
+				return ERROR_SEND_STATUS;
+			}
+			dut->dpp_local_bootstrap = atoi(resp);
+		}
+		ret = dpp_mdns_start(dut, DPP_MDNS_CONTROLLER);
+	} else {
+		sigma_dut_print(dut, DUT_MSG_INFO,
+				"Unsupported DPPmDNSAdvertise role: %s", role);
+	}
+
+	return ret < 0 ? ERROR_SEND_STATUS : SUCCESS_SEND_STATUS;
+}
+
+
+static enum sigma_cmd_result dpp_set_parameter(struct sigma_dut *dut,
+					       struct sigma_conn *conn,
+					       struct sigma_cmd *cmd)
+{
+	const char *val;
+	enum sigma_cmd_result res = SUCCESS_SEND_STATUS;
+
+	val = get_param(cmd, "DPPmDNSAdvertise");
+	if (val &&
+	    dpp_set_mdns_advertise(dut, conn, cmd, val) < 0)
+		res = ERROR_SEND_STATUS;
+
+	return res;
+}
+
+
 enum sigma_cmd_result dpp_dev_exec_action(struct sigma_dut *dut,
 					  struct sigma_conn *conn,
 					  struct sigma_cmd *cmd)
@@ -3284,6 +3751,8 @@ enum sigma_cmd_result dpp_dev_exec_action(struct sigma_dut *dut,
 
 	if (strcasecmp(type, "DPPReconfigure") == 0)
 		return dpp_reconfigure(dut, conn, cmd);
+	if (strcasecmp(type, "SetParameter") == 0)
+		return dpp_set_parameter(dut, conn, cmd);
 
 	if (!bs) {
 		send_resp(dut, conn, SIGMA_ERROR,
