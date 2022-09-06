@@ -10,6 +10,7 @@
 #include "sigma_dut.h"
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include "wpa_helpers.h"
 
 enum driver_type wifi_chip_type = DRIVER_NOT_SET;
@@ -140,6 +141,8 @@ enum sigma_program sigma_program_to_enum(const char *prog)
 		return PROGRAM_HS2_R2;
 	if (strcasecmp(prog, "HS2-R3") == 0)
 		return PROGRAM_HS2_R3;
+	if (strcasecmp(prog, "HS2-R4") == 0)
+		return PROGRAM_HS2_R4;
 	if (strcasecmp(prog, "WFD") == 0)
 		return PROGRAM_WFD;
 	if (strcasecmp(prog, "DisplayR2") == 0)
@@ -616,8 +619,6 @@ static int nl_get_multicast_id(struct sigma_dut *dut, struct nl80211_ctx *ctx,
 struct nl80211_ctx * nl80211_init(struct sigma_dut *dut)
 {
 	struct nl80211_ctx *ctx;
-	struct nl_cb *cb = NULL;
-	int ret;
 
 	ctx = calloc(1, sizeof(struct nl80211_ctx));
 	if (!ctx) {
@@ -662,19 +663,42 @@ struct nl80211_ctx * nl80211_init(struct sigma_dut *dut)
 		goto cleanup;
 	}
 
+	return ctx;
+
+cleanup:
+	if (ctx->sock)
+		nl_socket_free(ctx->sock);
+
+	free(ctx);
+	return NULL;
+}
+
+
+int nl80211_open_event_sock(struct sigma_dut *dut)
+{
+	struct nl_cb *cb = NULL;
+	int ret;
+	struct nl80211_ctx *ctx = dut->nl_ctx;
+
+	if (!ctx) {
+		sigma_dut_print(dut, DUT_MSG_ERROR, "nl80211 context is NULL");
+		return -1;
+	}
+
+	nl80211_close_event_sock(dut);
 	ctx->event_sock = nl_socket_alloc();
 	if (!ctx->event_sock) {
 		sigma_dut_print(dut, DUT_MSG_ERROR,
 				"Failed to create NL event socket, err: %s",
 				strerror(errno));
-		goto cleanup;
+		return -1;
 	}
 
 	if (nl_connect(ctx->event_sock, NETLINK_GENERIC)) {
 		sigma_dut_print(dut, DUT_MSG_ERROR,
 				"Could not connect event socket, err: %s",
 				strerror(errno));
-		goto cleanup;
+		return -1;
 	}
 
 	if (nl_socket_set_buffer_size(ctx->event_sock, SOCK_BUF_SIZE, 0) < 0) {
@@ -687,7 +711,7 @@ struct nl80211_ctx * nl80211_init(struct sigma_dut *dut)
 	if (!cb) {
 		sigma_dut_print(dut, DUT_MSG_INFO,
 				"Failed to get NL control block for event socket port");
-		goto cleanup;
+		return -1;
 	}
 
 	ret = nl_get_multicast_id(dut, ctx, "nl80211", "vendor");
@@ -706,16 +730,7 @@ struct nl80211_ctx * nl80211_init(struct sigma_dut *dut)
 	nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, no_seq_check, NULL);
 	nl_cb_put(cb);
 
-	return ctx;
-
-cleanup:
-	if (ctx->sock)
-		nl_socket_free(ctx->sock);
-	if (ctx->event_sock)
-		nl_socket_free(ctx->event_sock);
-
-	free(ctx);
-	return NULL;
+	return 0;
 }
 
 
@@ -731,6 +746,17 @@ void nl80211_deinit(struct sigma_dut *dut, struct nl80211_ctx *ctx)
 	if (ctx->event_sock)
 		nl_socket_free(ctx->event_sock);
 	free(ctx);
+}
+
+
+void nl80211_close_event_sock(struct sigma_dut *dut)
+{
+	struct nl80211_ctx *ctx = dut->nl_ctx;
+
+	if (ctx && ctx->event_sock) {
+		nl_socket_free(ctx->event_sock);
+		ctx->event_sock = NULL;
+	}
 }
 
 
@@ -960,6 +986,74 @@ int base64_encode(const char *src, size_t len, char *out, size_t out_len)
 }
 
 
+unsigned char * base64_decode(const char *src, size_t len, size_t *out_len)
+{
+	unsigned char dtable[256], *out, *pos, block[4], tmp;
+	size_t i, count, olen;
+	int pad = 0;
+	size_t extra_pad;
+
+	memset(dtable, 0x80, 256);
+	for (i = 0; i < sizeof(base64_table) - 1; i++)
+		dtable[(unsigned char) base64_table[i]] = (unsigned char) i;
+	dtable['='] = 0;
+
+	count = 0;
+	for (i = 0; i < len; i++) {
+		if (dtable[(unsigned char) src[i]] != 0x80)
+			count++;
+	}
+
+	if (count == 0)
+		return NULL;
+	extra_pad = (4 - count % 4) % 4;
+
+	olen = (count + extra_pad) / 4 * 3;
+	pos = out = malloc(olen);
+	if (!out)
+		return NULL;
+
+	count = 0;
+	for (i = 0; i < len + extra_pad; i++) {
+		unsigned char val;
+
+		if (i >= len)
+			val = '=';
+		else
+			val = src[i];
+		tmp = dtable[val];
+		if (tmp == 0x80)
+			continue;
+
+		if (val == '=')
+			pad++;
+		block[count] = tmp;
+		count++;
+		if (count == 4) {
+			*pos++ = (block[0] << 2) | (block[1] >> 4);
+			*pos++ = (block[1] << 4) | (block[2] >> 2);
+			*pos++ = (block[2] << 6) | block[3];
+			count = 0;
+			if (pad) {
+				if (pad == 1)
+					pos--;
+				else if (pad == 2)
+					pos -= 2;
+				else {
+					/* Invalid padding */
+					free(out);
+					return NULL;
+				}
+				break;
+			}
+		}
+	}
+
+	*out_len = pos - out;
+	return out;
+}
+
+
 int random_get_bytes(char *buf, size_t len)
 {
 	FILE *f;
@@ -1042,4 +1136,33 @@ int set_ipv6_addr(struct sigma_dut *dut, const char *ip, const char *mask,
 int snprintf_error(size_t size, int res)
 {
 	return res < 0 || (unsigned int) res >= size;
+}
+
+
+void kill_pid(struct sigma_dut *dut, const char *pid_file)
+{
+	int pid;
+	FILE *f;
+
+	f = fopen(pid_file, "r");
+	if (!f)
+		return; /* process is not running */
+
+	if (fscanf(f, "%d", &pid) != 1 || pid <= 0) {
+		sigma_dut_print(dut, DUT_MSG_ERROR,
+				"No PID for process in %s", pid_file);
+		fclose(f);
+		unlink(pid_file);
+		return;
+	}
+	fclose(f);
+
+	sigma_dut_print(dut, DUT_MSG_DEBUG, "Process PID found in %s: %d",
+			pid_file, pid);
+	if (kill(pid, SIGINT) < 0 && errno != ESRCH)
+		sigma_dut_print(dut, DUT_MSG_DEBUG, "kill failed: %s",
+				strerror(errno));
+
+	unlink(pid_file);
+	sleep(1);
 }
