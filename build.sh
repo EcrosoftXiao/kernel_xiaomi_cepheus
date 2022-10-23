@@ -7,6 +7,14 @@ export ANYKERNEL_PATH=~/Anykernel3
 export CLANG_PATH=~/prelude-clang
 export PATH=${CLANG_PATH}/bin:${PATH}
 export CLANG_TRIPLE=aarch64-linux-gnu-
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+export CLANG_PREBUILT_BIN=${CLANG_PATH}/bin
+export CC="ccache clang"
+export CXX="ccache clang++"
+export LD=ld.lld
+export LLVM=1
+export LLVM_IAS=1
 export ARCH=arm64
 export SUBARCH=arm64
 
@@ -20,8 +28,8 @@ rm -rf $KERNEL_PATH/out/ *.zip
 make mrproper && git reset --hard HEAD
 
 echo "=========================Build========================="
-make O=out CC="ccache clang" CXX="ccache clang++" CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld cepheus_defconfig
-make O=out CC="ccache clang" CXX="ccache clang++" CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld 2>&1 | tee out/kernel.log
+make O=out cepheus_defconfig
+make O=out | tee out/kernel.log
 
 if [ ! -e $KERNEL_PATH/out/arch/arm64/boot/Image.gz-dtb ]; then
     echo "=======================FAILED!!!======================="
