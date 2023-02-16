@@ -278,6 +278,12 @@ And public attribution of xiaomi platforms(like F1 and so and)
 			gpio-key,level-trigger;
 		};
 	};
+
+	xiaomi_touch {
+		compatible = "xiaomi-touch";
+		status = "ok";
+		touch,name = "xiaomi-touch";
+	};
 };
 
 &qupv3_se17_i2c {
